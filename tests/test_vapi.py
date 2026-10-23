@@ -24,8 +24,8 @@ REQUIRED = {
 @pytest.fixture
 def client(db_url):
     settings = Settings(
-        database_url=db_url, seed_demo_data=False, log_level="WARNING",
-        public_base_url=BASE, vapi_secret=SECRET,
+        database_url=db_url, seed_demo_data=False, log_level="DEBUG",
+        public_base_url=BASE, vapi_secret=SECRET, confirm_min_secs=0,
     )
     with TestClient(create_app(settings)) as c:
         yield c
@@ -91,7 +91,7 @@ class TestAssistantRequest:
 
         assert "pick up where we left off" in second["assistant"]["firstMessage"]
         result = call_tool(client, "resume_previous_call", {"accept": True}, call_id="call-2")
-        assert result["have"] == {"first_name": "Maria, spelled M-A-R-I-A"}
+        assert result["have"] == {"first_name": "Maria, spelled M, A, R, I, A"}
 
 
 def test_full_registration_over_webhook_is_saved_with_transcript(client):
@@ -184,3 +184,20 @@ def test_long_replies_are_split_into_sentences_for_faster_first_audio():
 
     assert split_sentences("Hi, I'm Sam. How are you?  Great!") == ["Hi, I'm Sam.", "How are you?", "Great!"]
     assert split_sentences("Your ZIP is 6 0 6 1 1") == ["Your ZIP is 6 0 6 1 1"]
+
+
+def test_stage_directions_are_not_spoken():
+    from app.vapi.tts import clean_for_speech
+
+    assert clean_for_speech("Is everything now correct?(Waiting for your response.)") == "Is everything now correct?"
+    assert clean_for_speech("Could you tell me your date of birth?We have to wait for user input.") == (
+        "Could you tell me your date of birth?"
+    )
+    assert clean_for_speech("Your sex\u2014Male or Female? [Awaiting user response]") == "Your sex, Male or Female?"
+    assert clean_for_speech("Spelled D\u2011A\u2011V\u2011I\u2011S.") == "Spelled D-A-V-I-S."
+
+
+def test_repeated_sentences_are_spoken_once():
+    from app.vapi.tts import clean_for_speech
+
+    assert clean_for_speech("What is your sex? What is your sex? Male or female?") == "What is your sex? Male or female?"

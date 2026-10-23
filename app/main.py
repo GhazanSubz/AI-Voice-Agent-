@@ -7,6 +7,8 @@ from fastapi import FastAPI
 from sqlalchemy import text
 
 from app.api.envelope import Envelope, error_response, install_exception_handlers
+from app.api.calls import router as calls_router
+from app.api.dashboard import router as dashboard_router
 from app.api.patients import router as patients_router
 from app.config import Settings, get_settings
 from app.db.seed import seed_demo_patients
@@ -22,7 +24,7 @@ from app.vapi.webhook import router as vapi_router
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
-    configure_logging(settings.log_level)
+    configure_logging(settings.log_level, settings.log_file)
 
     engine = make_engine(settings.database_url)
     session_factory = make_session_factory(engine)
@@ -54,6 +56,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     install_exception_handlers(app)
     app.include_router(patients_router)
+    app.include_router(calls_router)
+    app.include_router(dashboard_router)
     app.include_router(vapi_router)
     app.include_router(tts_router)
 

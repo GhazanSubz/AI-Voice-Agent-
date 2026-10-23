@@ -8,6 +8,7 @@ unless all required fields are present, the readback happened, and the caller co
 """
 
 import logging
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import date
@@ -66,7 +67,13 @@ class RegistrationSession:
     update_target: uuid.UUID | None = None
     saved_patient: PatientOut | None = None
     on_change: Callable[["RegistrationSession"], None] | None = None
+    # A save that arrives sooner than this after the agent asked "is that correct?" cannot be the
+    # caller's answer (the readback alone takes longer to say), so it is the LLM confirming on the
+    # caller's behalf, which live testing showed gpt-oss doing. 0 disables the check.
+    min_confirm_secs: float = 3.0
+    clock: Callable[[], float] = time.monotonic
     _checked_phones: set[str] = field(default_factory=set)
+    _asked_to_confirm_at: float | None = None
 
     def __post_init__(self):
         if self.caller_number:
@@ -119,6 +126,7 @@ class RegistrationSession:
         if self.phase is Phase.AWAITING_CONFIRMATION:
             # A correction during readback: confirm the changed fields, not the whole record again.
             result["note"] = "Read back only the corrected fields, then ask if everything is now correct."
+            self._asked_to_confirm_at = self.clock()
         elif not self.missing_required():
             self.phase = Phase.READY_FOR_READBACK
         else:
@@ -176,6 +184,7 @@ class RegistrationSession:
         if missing:
             return {"ready": False, "still_missing_required": missing}
         self.phase = Phase.AWAITING_CONFIRMATION
+        self._asked_to_confirm_at = self.clock()
         self._notify()
         return {
             "ready": True,
@@ -199,6 +208,13 @@ class RegistrationSession:
             return {"saved": False, "error": "do the readback with get_readback before saving"}
         if not caller_confirmed:
             return {"saved": False, "error": "the caller has not confirmed the readback yet"}
+        if self._asked_to_confirm_at is not None and self.clock() - self._asked_to_confirm_at < self.min_confirm_secs:
+            log.warning("save refused: too soon after the readback", extra={"call_sid": self.call_sid})
+            return {
+                "saved": False,
+                "error": "refused: the caller has not answered the readback yet",
+                "note": "Finish the readback, ask if everything is correct, and wait for their answer.",
+            }
 
         last_error: Exception | None = None
         for attempt in (1, 2):
@@ -301,7 +317,8 @@ def _digits(value: str) -> str:
 def spoken_value(field_name: str, value: Any) -> str:
     """How the agent should say a stored value out loud (TTS-friendly, unambiguous)."""
     if field_name in ("first_name", "last_name"):
-        letters = "-".join(ch.upper() for ch in value if ch.isalpha())
+        # Commas, not hyphens: Kokoro reads "J-A-N-E" as one word that sounds like "Jane".
+        letters = ", ".join(ch.upper() for ch in value if ch.isalpha())
         return f"{value}, spelled {letters}"
     if field_name == "date_of_birth":
         return f"{_MONTHS[value.month - 1]} {value.day}, {value.year}"

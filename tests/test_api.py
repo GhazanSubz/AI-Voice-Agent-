@@ -147,7 +147,7 @@ class TestSoftDelete:
 
 
 def test_data_survives_app_restart(db_url, valid_patient):
-    settings = Settings(database_url=db_url, seed_demo_data=False, log_level="WARNING")
+    settings = Settings(database_url=db_url, seed_demo_data=False, log_level="DEBUG")
     with TestClient(create_app(settings)) as first:
         pid = create(first, valid_patient)["patient_id"]
 
@@ -156,7 +156,7 @@ def test_data_survives_app_restart(db_url, valid_patient):
 
 
 def test_seed_runs_once(db_url):
-    settings = Settings(database_url=db_url, seed_demo_data=True, log_level="WARNING")
+    settings = Settings(database_url=db_url, seed_demo_data=True, log_level="DEBUG")
     for _ in range(2):
         with TestClient(create_app(settings)) as c:
             assert len(c.get("/patients").json()["data"]) == 2

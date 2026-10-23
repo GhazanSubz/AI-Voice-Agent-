@@ -22,7 +22,7 @@ from app.services.calls import CallService
 from app.services.patients import PatientService
 from app.voice.prompts import build_system_prompt, first_message
 from app.voice.session import FIELD_LABELS, RegistrationSession
-from app.voice.tools import TOOL_SCHEMAS, CallToolbox
+from app.voice.tools import TOOL_SCHEMAS, CallToolbox, asked_question
 
 OPENAI_TOOLS = [
     {
@@ -54,7 +54,11 @@ async def main() -> None:
     patients, calls = PatientService(factory), CallService(factory)
 
     call_sid = f"CLI{uuid.uuid4().hex[:12]}"
-    session = RegistrationSession(call_sid=call_sid, patients=patients, caller_number=args.caller)
+    # Scripted replies arrive instantly, and this harness enforces the stronger turn guard itself,
+    # so the timing-based confirmation check is off here.
+    session = RegistrationSession(
+        call_sid=call_sid, patients=patients, caller_number=args.caller, min_confirm_secs=0
+    )
     calls.start(call_sid, session.caller_number)
     resume = calls.find_resumable_draft(session.caller_number, call_sid)
     ended = False
@@ -95,21 +99,25 @@ async def main() -> None:
             except EOFError:
                 break
         messages.append({"role": "user", "content": line})
+        agent_said: list[str] = []  # what the agent said since this caller message
 
         # Let the model speak, running any tool calls it makes until it produces plain text.
         while True:
             response = await client.chat.completions.create(
-                model=settings.vapi_llm_model, messages=messages, tools=OPENAI_TOOLS, temperature=0.3
+                model=settings.vapi_llm_model, messages=messages, tools=OPENAI_TOOLS, temperature=settings.llm_temperature
             )
             msg = response.choices[0].message
             messages.append(msg.model_dump(exclude_none=True))
             if msg.content:
+                agent_said.append(msg.content)
                 print(f"\nSAM: {msg.content}")
             if not msg.tool_calls:
                 break
             for tc in msg.tool_calls:
                 tool_args = json.loads(tc.function.arguments or "{}")
-                result = await toolbox.call(tc.function.name, tool_args)
+                result = await toolbox.call(
+                    tc.function.name, tool_args, agent_asked_since_caller_spoke=asked_question(agent_said)
+                )
                 print(f"   [tool] {tc.function.name}({json.dumps(tool_args)}) -> {json.dumps(result)}")
                 messages.append({"role": "tool", "tool_call_id": tc.id, "content": json.dumps(result)})
             if ended:

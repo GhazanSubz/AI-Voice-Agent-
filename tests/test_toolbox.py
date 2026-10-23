@@ -31,7 +31,7 @@ def run(coro):
 
 def test_every_schema_has_a_handler(services):
     patients, _ = services
-    box = CallToolbox(session=RegistrationSession(call_sid="CA1", patients=patients))
+    box = CallToolbox(session=RegistrationSession(call_sid="CA1", patients=patients, min_confirm_secs=0))
     assert {t["name"] for t in TOOL_SCHEMAS} == set(box.handlers)
 
 
@@ -42,7 +42,7 @@ def test_full_registration_through_tools(services):
     async def on_end():
         ended.append(True)
 
-    box = CallToolbox(session=RegistrationSession(call_sid="CA1", patients=patients), on_end_call=on_end)
+    box = CallToolbox(session=RegistrationSession(call_sid="CA1", patients=patients, min_confirm_secs=0), on_end_call=on_end)
 
     async def flow():
         await box.call("update_fields", {"fields": REQUIRED})
@@ -58,7 +58,7 @@ def test_full_registration_through_tools(services):
 
 def test_tool_exception_becomes_recoverable_result(services, monkeypatch):
     patients, _ = services
-    box = CallToolbox(session=RegistrationSession(call_sid="CA1", patients=patients))
+    box = CallToolbox(session=RegistrationSession(call_sid="CA1", patients=patients, min_confirm_secs=0))
     monkeypatch.setattr(box.session, "get_readback", lambda: 1 / 0)
     result = run(box.call("get_readback", {}))
     assert "error" in result
@@ -66,7 +66,7 @@ def test_tool_exception_becomes_recoverable_result(services, monkeypatch):
 
 def test_bad_arguments_do_not_crash(services):
     patients, _ = services
-    box = CallToolbox(session=RegistrationSession(call_sid="CA1", patients=patients))
+    box = CallToolbox(session=RegistrationSession(call_sid="CA1", patients=patients, min_confirm_secs=0))
     assert "error" in run(box.call("update_fields", {"fields": "Maria"}))
     assert "error" in run(box.call("no_such_tool", {}))
 
@@ -78,7 +78,7 @@ def test_language_switch_triggers_pipeline_callback(services):
     async def on_lang(lang):
         switched.append(lang)
 
-    box = CallToolbox(session=RegistrationSession(call_sid="CA1", patients=patients), on_language_change=on_lang)
+    box = CallToolbox(session=RegistrationSession(call_sid="CA1", patients=patients, min_confirm_secs=0), on_language_change=on_lang)
     run(box.call("set_language", {"language": "es"}))
     assert switched == ["es"]
 
@@ -106,7 +106,7 @@ def test_dropped_call_can_be_resumed_from_same_number(services):
 
 def test_completed_call_is_linked_to_patient_with_transcript(services):
     patients, calls = services
-    session = RegistrationSession(call_sid="CA1", patients=patients)
+    session = RegistrationSession(call_sid="CA1", patients=patients, min_confirm_secs=0)
     calls.start("CA1", None)
     session.update_fields(REQUIRED)
     session.get_readback()

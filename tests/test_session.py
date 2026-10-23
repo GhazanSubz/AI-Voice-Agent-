@@ -29,7 +29,7 @@ def patients(tmp_path):
 
 @pytest.fixture
 def session(patients):
-    return RegistrationSession(call_sid="CA1", patients=patients, caller_number="+13125550110")
+    return RegistrationSession(call_sid="CA1", patients=patients, caller_number="+13125550110", min_confirm_secs=0)
 
 
 def confirm_and_save(session):
@@ -55,7 +55,7 @@ def test_invalid_field_is_rejected_with_reason_and_others_kept(session):
 def test_correction_overwrites_value(session):
     session.update_fields({"last_name": "Davies"})
     result = session.update_fields({"last_name": "Davis"})
-    assert result["accepted"]["last_name"] == "Davis, spelled D-A-V-I-S"
+    assert result["accepted"]["last_name"] == "Davis, spelled D, A, V, I, S"
     assert session.fields["last_name"] == "Davis"
 
 
@@ -174,3 +174,39 @@ def test_draft_round_trip(session, patients):
 
     assert set(result["have"]) == {"first_name", "date_of_birth"}
     assert resumed.fields == session.fields
+
+
+class FakeClock:
+    def __init__(self):
+        self.now = 1000.0
+
+    def __call__(self):
+        return self.now
+
+
+def test_save_seconds_after_readback_is_refused_as_not_the_callers_answer(patients):
+    clock = FakeClock()
+    session = RegistrationSession(call_sid="CA9", patients=patients, clock=clock)  # default 3 s
+    session.update_fields(REQUIRED)
+    session.get_readback()
+
+    clock.now += 1.0  # the LLM "confirms" one second after starting the readback
+    refused = session.save_patient(caller_confirmed=True)
+    clock.now += 8.0  # a real caller: readback spoken, then "yes"
+    saved = session.save_patient(caller_confirmed=True)
+
+    assert refused["saved"] is False and "not answered" in refused["error"]
+    assert saved["saved"] is True
+
+
+def test_correction_during_readback_restarts_the_confirmation_wait(patients):
+    clock = FakeClock()
+    session = RegistrationSession(call_sid="CA9", patients=patients, clock=clock)
+    session.update_fields(REQUIRED)
+    session.get_readback()
+    clock.now += 10
+    session.update_fields({"last_name": "Davis"})  # agent reads back the fix and asks again
+
+    assert session.save_patient(caller_confirmed=True)["saved"] is False
+    clock.now += 4
+    assert session.save_patient(caller_confirmed=True)["saved"] is True

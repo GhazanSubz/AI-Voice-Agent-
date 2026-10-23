@@ -23,7 +23,7 @@ from app.services.patients import PatientService, PersistenceError
 from app.vapi.assistant import build_assistant
 from app.vapi.registry import CallRegistry
 from app.voice.session import FIELD_LABELS, RegistrationSession
-from app.voice.tools import CallToolbox
+from app.voice.tools import CallToolbox, asked_question
 
 log = logging.getLogger(__name__)
 
@@ -54,7 +54,7 @@ async def vapi_webhook(request: Request):
     if kind == "assistant-request":
         return _assistant_request(message, state.settings, state.patient_service, state.call_service, state.call_registry)
     if kind == "tool-calls":
-        return await _tool_calls(message, state.patient_service, state.call_service, state.call_registry)
+        return await _tool_calls(message, state.settings, state.patient_service, state.call_service, state.call_registry)
     if kind == "end-of-call-report":
         _end_of_call(message, state.call_service, state.call_registry)
     elif kind == "status-update":
@@ -72,8 +72,10 @@ def _caller_number(message: dict[str, Any]) -> str | None:
     return customer.get("number")
 
 
-def _new_toolbox(call_id, caller, patients, calls) -> CallToolbox:
-    session = RegistrationSession(call_sid=call_id, patients=patients, caller_number=caller)
+def _new_toolbox(call_id, caller, settings: Settings, patients, calls) -> CallToolbox:
+    session = RegistrationSession(
+        call_sid=call_id, patients=patients, caller_number=caller, min_confirm_secs=settings.confirm_min_secs
+    )
     _safe(calls.start, call_id, session.caller_number)
     resume = _safe(calls.find_resumable_draft, session.caller_number, call_id)
     return CallToolbox(
@@ -86,7 +88,7 @@ def _new_toolbox(call_id, caller, patients, calls) -> CallToolbox:
 
 def _assistant_request(message, settings: Settings, patients, calls, registry: CallRegistry):
     call_id = _call_id(message)
-    toolbox = _new_toolbox(call_id, _caller_number(message), patients, calls)
+    toolbox = _new_toolbox(call_id, _caller_number(message), settings, patients, calls)
     registry.put(call_id, toolbox)
 
     resume_fields = [FIELD_LABELS.get(f, f) for f in toolbox.resume_draft] if toolbox.resume_draft else None
@@ -101,17 +103,25 @@ def _assistant_request(message, settings: Settings, patients, calls, registry: C
     }
 
 
-async def _tool_calls(message, patients: PatientService, calls: CallService, registry: CallRegistry):
+async def _tool_calls(message, settings: Settings, patients: PatientService, calls: CallService, registry: CallRegistry):
     call_id = _call_id(message)
     toolbox = registry.get(call_id)
     if toolbox is None:
         # e.g. the server restarted mid-call: rebuild from the caller ID and the saved draft.
-        toolbox = _new_toolbox(call_id, _caller_number(message), patients, calls)
+        toolbox = _new_toolbox(call_id, _caller_number(message), settings, patients, calls)
         record_draft = _safe(calls.get_draft, call_id)
         if record_draft:
             toolbox.session.resume_from(record_draft)
         registry.put(call_id, toolbox)
 
+    # Logged for diagnosis only, NOT enforced: on live calls Vapi's conversation snapshot can lag
+    # behind the caller's newest sentence, so enforcing it refused real answers. Saves are guarded
+    # by timing instead (RegistrationSession.min_confirm_secs).
+    asked = _agent_asked_since_caller_spoke(message)
+    log.info(
+        "tool-calls received",
+        extra={"call_id": call_id, "conversation_messages": len(_conversation(message)), "agent_asked": asked},
+    )
     results = []
     for tool_call in message.get("toolCallList") or []:
         function = tool_call.get("function") or {}
@@ -129,14 +139,30 @@ async def _tool_calls(message, patients: PatientService, calls: CallService, reg
     return {"results": results}
 
 
+def _conversation(message: dict[str, Any]) -> list[dict[str, Any]]:
+    artifact = message.get("artifact") or {}
+    return artifact.get("messages") or message.get("messages") or []
+
+
+def _agent_asked_since_caller_spoke(message: dict[str, Any]) -> bool:
+    """True if the agent asked a question after the caller's latest utterance (see CallToolbox.call)."""
+    agent_texts: list[str] = []
+    for item in reversed(_conversation(message)):
+        role = item.get("role")
+        if role == "user":
+            break
+        if role in ("bot", "assistant"):
+            agent_texts.append(item.get("message") or item.get("content") or "")
+    return asked_question(agent_texts)
+
+
 def _end_of_call(message, calls: CallService, registry: CallRegistry) -> None:
     call_id = _call_id(message)
     toolbox = registry.pop(call_id)
     session = toolbox.session if toolbox else None
-    artifact = message.get("artifact") or {}
     transcript = [
         {"speaker": "caller" if m.get("role") == "user" else "agent", "text": m.get("message", "")}
-        for m in artifact.get("messages") or []
+        for m in _conversation(message)
         if m.get("role") in ("user", "bot", "assistant") and m.get("message")
     ]
     patient_id = session.saved_patient.patient_id if session and session.saved_patient else None

@@ -87,6 +87,17 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
 ]
 
 
+# Tools that act on what the caller said. They need a fresh answer from the caller.
+CALLER_DATA_TOOLS = frozenset(
+    {"update_fields", "use_existing_record", "save_patient", "start_over", "resume_previous_call"}
+)
+
+
+def asked_question(agent_texts: list[str]) -> bool:
+    """Whether anything the agent said since the caller's last message was a question."""
+    return any("?" in text or "¿" in text for text in agent_texts)
+
+
 @dataclass
 class CallToolbox:
     """Binds the tools to one call's session and to pipeline side effects."""
@@ -112,10 +123,28 @@ class CallToolbox:
             "end_call": self._end_call,
         }
 
-    async def call(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
+    async def call(
+        self, name: str, args: dict[str, Any], *, agent_asked_since_caller_spoke: bool = False
+    ) -> dict[str, Any]:
+        """Run one tool.
+
+        agent_asked_since_caller_spoke: the transport tells us whether the agent has asked the
+        caller a question that the caller has not answered yet. Text testing showed the LLM will
+        ask a question and then invent the answer (or "confirm" the readback) in the same turn, so
+        tools that record caller data are refused until the caller has actually replied.
+        """
         handler = self.handlers.get(name)
         if handler is None:
             return {"error": f"unknown tool {name}"}
+        if agent_asked_since_caller_spoke and name in CALLER_DATA_TOOLS:
+            log.warning(
+                "blocked tool call made before the caller answered",
+                extra={"call_sid": self.session.call_sid, "tool": name, "tool_args": args},
+            )
+            return {
+                "error": "refused: the caller has not answered your question yet",
+                "note": "Do not guess their answer and say nothing more. Reply with an empty message.",
+            }
         try:
             result = await handler(args or {})
         except Exception:
@@ -124,7 +153,7 @@ class CallToolbox:
             result = {"error": "internal error, apologize and ask the caller to repeat that"}
         log.info(
             "tool call",
-            extra={"call_sid": self.session.call_sid, "tool": name, "args": args, "result": result},
+            extra={"call_sid": self.session.call_sid, "tool": name, "tool_args": args, "result": result},
         )
         return result
 

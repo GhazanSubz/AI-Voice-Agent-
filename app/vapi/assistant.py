@@ -53,8 +53,10 @@ def build_assistant(
         "model": {
             "provider": "groq",
             "model": settings.vapi_llm_model,
-            "temperature": 0.3,  # warm but consistent; tool arguments must be exact
-            "maxTokens": 300,
+            "temperature": settings.llm_temperature,
+            # gpt-oss reasons before answering and those tokens count here; at 300 a confusing
+            # utterance used the whole budget on reasoning and the caller heard silence.
+            "maxTokens": 1000,
             "messages": [
                 {
                     "role": "system",
@@ -67,13 +69,26 @@ def build_assistant(
             ],
             "tools": tools,
         },
-        # Deepgram's "multi" mode transcribes English and Spanish without a manual switch.
-        "transcriber": {"provider": "deepgram", "model": "nova-3", "language": "multi"},
+        # See Settings.vapi_transcriber_language for the English-accuracy vs Spanish trade-off.
+        "transcriber": {"provider": "deepgram", "model": "nova-3", "language": settings.vapi_transcriber_language},
         # Kokoro-82M on our own server (app/vapi/tts.py).
         "voice": {
             "provider": "custom-voice",
             "server": {"url": f"{base}/vapi/tts", "headers": headers, "timeoutSeconds": 30},
         },
+        # Turn-taking. The first live call showed callers reading phone numbers and ZIPs in chunks
+        # ("5 1 3 ... 6 8 1 ..."); with Vapi's defaults every pause ended the turn, the agent
+        # replied mid-number and the replies piled up. Wait longer after digits and require a
+        # couple of words before treating caller speech as an interruption.
+        "startSpeakingPlan": {
+            "waitSeconds": 0.8,
+            "transcriptionEndpointingPlan": {
+                "onPunctuationSeconds": 0.5,
+                "onNoPunctuationSeconds": 1.5,
+                "onNumberSeconds": 1.8,
+            },
+        },
+        "stopSpeakingPlan": {"numWords": 2, "voiceSeconds": 0.3, "backoffSeconds": 1},
         "server": webhook,
         "serverMessages": ["tool-calls", "end-of-call-report", "status-update"],
         "endCallMessage": "Thanks for calling. Goodbye!",

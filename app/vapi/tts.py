@@ -26,7 +26,16 @@ router = APIRouter(prefix="/vapi", tags=["telephony"])
 
 _SUPPORTED_RATES = {8000, 16000, 22050, 24000, 44100}
 _KOKORO_LANG = {"en": "en-us", "es": "es"}
-_SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s*(?=[A-Z¿¡\"'(\[]|$)|(?<=[.!?])\s+")
+_ASIDE = re.compile(r"\([^)]*\)|\[[^\]]*\]")
+_META_SENTENCE = re.compile(
+    r"\b(wait(ing)? for (the )?(user|caller|your|their)|awaiting (user|caller|your)|user input|"
+    r"user (says|said|response))\b",
+    re.IGNORECASE,
+)
+_SPACES = re.compile(r"\s+")
+# Typographic punctuation the model likes -> what a TTS phonemizer reads cleanly.
+_PUNCTUATION = str.maketrans({"‑": "-", "‐": "-", "–": ", ", "—": ", ", "’": "'", "‘": "'", "“": '"', "”": '"'})
 
 
 class KokoroEngine:
@@ -60,6 +69,28 @@ class KokoroEngine:
         return self._settings.kokoro_voice_es if language == "es" else self._settings.kokoro_voice_en
 
 
+def clean_for_speech(text: str) -> str:
+    """Drop text the LLM meant as stage directions rather than speech.
+
+    gpt-oss sometimes appends asides such as "(Waiting for your answer.)" or "[Awaiting user
+    response]", or a meta sentence like "We have to wait for user input." None of that should be
+    spoken to a caller.
+    """
+    text = _ASIDE.sub(" ", text)
+    kept: list[str] = []
+    for sentence in split_sentences(text):
+        # gpt-oss sometimes says the same question twice in a row; say it once.
+        if _META_SENTENCE.search(sentence) or (kept and _norm(sentence) == _norm(kept[-1])):
+            continue
+        kept.append(sentence)
+    text = " ".join(kept)
+    return _SPACES.sub(" ", text.translate(_PUNCTUATION)).strip()
+
+
+def _norm(sentence: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", sentence.lower())
+
+
 def split_sentences(text: str) -> list[str]:
     """Kokoro synthesizes a whole request before yielding, so long replies are fed sentence by
     sentence: the caller hears the first sentence while the rest is still being generated."""
@@ -76,7 +107,7 @@ def _to_pcm16(samples: np.ndarray, source_rate: int, target_rate: int) -> bytes:
 async def synthesize(request: Request):
     require_vapi_secret(request)
     message = (await request.json()).get("message") or {}
-    text = (message.get("text") or "").strip()
+    text = clean_for_speech(message.get("text") or "")
     sample_rate = int(message.get("sampleRate") or 0)
     if message.get("type") != "voice-request" or not text or sample_rate not in _SUPPORTED_RATES:
         raise HTTPException(status_code=400, detail="expected a voice-request with text and a supported sampleRate")

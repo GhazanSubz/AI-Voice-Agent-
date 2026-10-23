@@ -7,25 +7,6 @@ persistent database, and exposes the data through a REST API and a web dashboard
 Built for the CareCloud Voice AI take-home. Total running cost: **$0** (free tiers only, open
 models wherever possible).
 
-## Live demo
-
-| What | Where |
-|---|---|
-| Phone number | **+1 (302) 480-9012** |
-| API base URL | https://isaura-acold-overstiffly.ngrok-free.dev |
-| Dashboard | https://isaura-acold-overstiffly.ngrok-free.dev/dashboard |
-| Interactive API docs | https://isaura-acold-overstiffly.ngrok-free.dev/docs |
-
-The server runs on a laptop behind an ngrok static domain (see [Known limitations](#known-limitations-and-trade-offs)).
-On the free ngrok plan, the first visit **from a browser** shows an ngrok "You are about to visit"
-page; click **Visit Site** once. API clients (curl, Postman, Vapi) never see it.
-
-Try it:
-
-```bash
-curl "https://isaura-acold-overstiffly.ngrok-free.dev/patients?last_name=Doe"
-```
-
 ## What a call sounds like
 
 1. Sam greets the caller and asks for their first and last name.
@@ -139,75 +120,6 @@ each section. Key decisions:
 
 The same prompt and tools can be exercised by text with `python -m scripts.chat_cli`.
 
-## Data model
-
-`patients` table ([app/db/models.py](app/db/models.py)). Validation is in
-[app/domain/schemas.py](app/domain/schemas.py); the CHECK constraints are a second line of defence.
-
-| Field | Type | Rules | Required |
-|---|---|---|---|
-| `patient_id` | UUID | Auto-generated | Auto |
-| `first_name`, `last_name` | string | 1-50 chars, letters, hyphens, apostrophes, single spaces | Yes |
-| `date_of_birth` | date | Real date, not in the future, after 1900; returned as MM/DD/YYYY | Yes |
-| `sex` | enum | Male, Female, Other, Decline to Answer | Yes |
-| `phone_number` | string | Valid 10-digit NANP number; "+1 (415) 555-0132" is normalized | Yes |
-| `email` | string | Valid email | No |
-| `address_line_1` | string | Street address | Yes |
-| `address_line_2` | string | Apt / suite / unit | No |
-| `city` | string | 1-100 chars | Yes |
-| `state` | string | USPS code incl. DC and territories; full names accepted | Yes |
-| `zip_code` | string | 5-digit or ZIP+4 | Yes |
-| `insurance_provider` | string | | No |
-| `insurance_member_id` | string | Alphanumeric (spaces and dashes stripped) | No |
-| `preferred_language` | string | Default English | No |
-| `emergency_contact_name` | string | Full name | No |
-| `emergency_contact_phone` | string | Valid 10-digit number | No |
-| `created_at`, `updated_at` | timestamp | UTC, automatic | Auto |
-| `deleted_at` | timestamp | Set by soft delete | Auto |
-
-Indexes on `last_name`, `date_of_birth` and `phone_number` back the API filters and the
-returning-caller lookup. Phone numbers are deliberately not unique: a household can share one.
-
-`call_records` stores each call: caller number, status (`completed`, `abandoned`, `resumed`),
-the patient it produced, the draft fields captured so far, and the transcript.
-
-## REST API
-
-All responses use one envelope: `{"data": ..., "error": null}` or
-`{"data": null, "error": {"code", "message", "details": [{"field", "message"}]}}`.
-
-| Method | Endpoint | Description |
-|---|---|---|
-| GET | `/patients` | List active patients. Filters: `last_name` (case-insensitive), `date_of_birth`, `phone_number`; `limit`, `offset` |
-| GET | `/patients/{id}` | One patient by UUID |
-| POST | `/patients` | Create; returns the record with `patient_id` (201) |
-| PUT | `/patients/{id}` | Partial update; only sent fields change, optional fields can be cleared with `null` |
-| DELETE | `/patients/{id}` | Soft delete: sets `deleted_at`; the record disappears from all reads |
-| GET | `/calls` | Recent calls with status, linked patient and transcript |
-| GET | `/health` | Database health check |
-
-Status codes: **200** OK, **201** created, **400** malformed request (bad JSON, bad UUID, bad
-query parameter), **404** unknown or deleted patient, **422** fields that fail validation
-(unknown fields are rejected too), **500** server or database failure.
-
-## Edge cases and resilience
-
-| Situation | What happens |
-|---|---|
-| Invalid DOB, 3-digit phone, bad state or ZIP | Field rejected with a speakable reason; only that field is re-asked |
-| Caller corrects a field ("it's D-A-V-I-S") | Overwritten; during readback, only the correction is read back |
-| Answers out of order or several at once | `update_fields` takes any subset in any order |
-| Caller wants to start over | `start_over` clears the session |
-| Phone number matches an existing patient | Agent offers to update that record instead |
-| Non-U.S. address | Agent explains once that a U.S. address is needed |
-| LLM tries to "confirm" for the caller | `save_patient` refused if it comes within 3 s of the readback question |
-| Database write fails | One retry, then a spoken apology and an offer to try again; payload logged |
-| Call drops mid-registration | Draft saved after every tool call; next call from that number offers to resume |
-| Server restarts mid-call | Session rebuilt from the saved draft on the next tool call (seen working on a live call) |
-| A tool throws | Caught and returned as a recoverable error, so the agent apologizes rather than going silent |
-| LLM writes stage directions ("(waiting for your answer)") or repeats a sentence | Stripped before speech |
-| Forged webhook or TTS request | Rejected with 401 without the shared secret |
-
 ## Tech stack and why
 
 | Layer | Choice | Why |
@@ -316,8 +228,9 @@ testing was complete.
   Spanish switch are covered by automated tests but were not tried end to end on the phone.
 - No automated tests run against the live Vapi or Groq services; those were tested by hand.
 
-Given more time, the next step would be a set of scripted live calls covering each row of the
-[edge-case table](#edge-cases-and-resilience), made from a U.S. number.
+Given more time, the next step would be a set of scripted live calls from a U.S. number,
+covering invalid answers, corrections, starting over, a returning caller, a dropped call and a
+database failure.
 
 ## Environment variables
 

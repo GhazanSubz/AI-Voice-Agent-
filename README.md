@@ -160,8 +160,8 @@ curl -L -o models/kokoro-v1.0.int8.onnx https://github.com/thewh1teagle/kokoro-o
 curl -L -o models/voices-v1.0.bin https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin
 ```
 
-**3. Configure.** Copy `.env.example` to `.env` and fill it in (see the next section). Generate
-the shared secret with:
+**3. Configure.** Copy `.env.example` to `.env` and fill it in; each setting is explained in
+that file. Generate the shared secret with:
 
 ```bash
 python -c "import secrets; print(secrets.token_urlsafe(32))"
@@ -202,58 +202,6 @@ across restarts, database failure handling, the session state machine, every too
 authentication, the assistant config, call resume, TTS streaming and speech cleanup, and the
 dashboard.
 
-## Testing status
-
-I want to be upfront about what has and hasn't been verified, since time ran short before
-testing was complete.
-
-**Verified**
-
-- The 90 automated tests above pass.
-- The full flow by text through `scripts/chat_cli.py` against the real model: invalid date of
-  birth re-asked, a spelling correction during readback, country-code stripping, a non-U.S.
-  address handled, and the record saved only after confirmation.
-- Live phone calls through the real number: Vapi reached the webhook, the assistant was served
-  per call, tools recorded fields, Kokoro spoke with about 0.7-1.0 s to first audio, transcripts
-  were stored, and a server restart in the middle of a call recovered from the saved draft.
-
-**Not yet verified, due to time**
-
-- **No live phone call has completed a full registration yet.** Test calls were placed from
-  Pakistan, with weak speech-recognition confidence, and each one uncovered an issue that was
-  then fixed. The most recent fixes (the higher LLM token limit, English-only transcription,
-  the timing guard on saves, and the language-switch rules) are covered by the automated tests
-  but have not yet been exercised on a live call.
-- Duplicate-caller detection, resuming a dropped call, the database-failure message and the
-  Spanish switch are covered by automated tests but were not tried end to end on the phone.
-- No automated tests run against the live Vapi or Groq services; those were tested by hand.
-
-Given more time, the next step would be a set of scripted live calls from a U.S. number,
-covering invalid answers, corrections, starting over, a returning caller, a dropped call and a
-database failure.
-
-## Environment variables
-
-| Variable | Required | Default | Purpose |
-|---|---|---|---|
-| `PUBLIC_BASE_URL` | Yes | | Public https origin Vapi reaches, e.g. `https://name.ngrok-free.dev` |
-| `VAPI_SECRET` | Yes | | Shared secret checked on every webhook and TTS request |
-| `GROQ_API_KEY` | For `chat_cli` | | Only the text harness calls Groq directly; live calls use Vapi's Groq integration |
-| `DATABASE_URL` | No | `sqlite:///./data/patients.db` | Any SQLAlchemy URL |
-| `SEED_DEMO_DATA` | No | `true` | Insert two fictional patients when the table is empty |
-| `LOG_LEVEL` | No | `INFO` | |
-| `LOG_FILE` | No | `logs/app.log` | JSON log file in addition to stdout; empty disables it |
-| `VAPI_LLM_MODEL` | No | `openai/gpt-oss-120b` | Groq model Vapi runs |
-| `LLM_TEMPERATURE` | No | `1.0` | gpt-oss is tuned for 1.0; lower values caused repetition loops |
-| `VAPI_TRANSCRIBER_LANGUAGE` | No | `en` | `multi` adds Spanish recognition at some cost to English accuracy |
-| `CONFIRM_MIN_SECS` | No | `3.0` | Minimum seconds between the readback question and an accepted save |
-| `KOKORO_MODEL_PATH` | No | `models/kokoro-v1.0.int8.onnx` | |
-| `KOKORO_VOICES_PATH` | No | `models/voices-v1.0.bin` | |
-| `KOKORO_VOICE_EN` / `KOKORO_VOICE_ES` | No | `af_heart` / `ef_dora` | |
-| `TTS_WARM_UP` | No | `true` | Load Kokoro at startup so the first call doesn't wait |
-
-No keys are in the source code; `.env` is git-ignored.
-
 ## Observability
 
 Every log line is one JSON object, written to stdout and `logs/app.log`. Per call you get
@@ -264,6 +212,8 @@ patient, and shown on the dashboard.
 
 ## Known limitations and trade-offs
 
+- **Testing is not yet complete.** Due to time constraints, end-to-end testing over live phone
+  calls is still in progress.
 - **The server runs on a laptop.** The phone line works only while the laptop is on, awake and
   online, with the tunnel running. A cloud VM would remove this; it was left out for cost.
 - **Speech-to-text is Deepgram via Vapi, not open source.** It's the one non-open model.

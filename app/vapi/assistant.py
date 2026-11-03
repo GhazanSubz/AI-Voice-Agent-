@@ -83,14 +83,14 @@ def build_assistant(
         },
         # Turn-taking, tuned from live calls:
         # - Callers read numbers in chunks and pause between first and last name ("Ladan ... and
-        #   my last name is"). Ending the turn on punctuation cut them off, so a LiveKit model
-        #   judges whether the sentence sounds finished (English only, matching the transcriber)
-        #   and waits up to 2 s when it doesn't. The transcription plan is the fallback.
+        #   my last name is"). Ending the turn 0.5 s after punctuation cut them off, so the wait
+        #   after punctuation is longer. LiveKit smart endpointing was tried for this and removed:
+        #   on its first live call the caller's answer was never turned into a turn at all, the
+        #   agent stayed silent and Vapi hung up.
         # - Callers answer while Sam is still asking ("male" mid-question). With numWords 2 a
         #   one-word answer never interrupted, so Sam talked over it. 0 stops on any voice.
         "startSpeakingPlan": {
             "waitSeconds": 0.6,
-            "smartEndpointingPlan": {"provider": "livekit", "waitFunction": "2000 / (1 + exp(-10 * (x - 0.5)))"},
             "transcriptionEndpointingPlan": {
                 "onPunctuationSeconds": 0.8,
                 "onNoPunctuationSeconds": 1.5,

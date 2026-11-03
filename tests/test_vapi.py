@@ -206,8 +206,11 @@ def test_repeated_sentences_are_spoken_once():
 def test_assistant_turn_taking_fillers_and_goodbye(client):
     assistant = client.post("/vapi/webhook", json=event("assistant-request"), headers=AUTH).json()["assistant"]
 
-    # Pauses mid-sentence ("Ladan ... and my last name is") shouldn't end the caller's turn.
-    assert assistant["startSpeakingPlan"]["smartEndpointingPlan"]["provider"] == "livekit"
+    # Pauses mid-sentence ("Ladan ... and my last name is") shouldn't end the caller's turn,
+    # using pause-based endpointing only (LiveKit swallowed the caller's turn on a live call).
+    plan = assistant["startSpeakingPlan"]
+    assert "smartEndpointingPlan" not in plan
+    assert plan["transcriptionEndpointingPlan"]["onPunctuationSeconds"] >= 0.8
     # A one-word answer given while Sam is still asking must interrupt Sam.
     assert assistant["stopSpeakingPlan"]["numWords"] == 0
     # Our tools are silent: no "Just a sec" filler.

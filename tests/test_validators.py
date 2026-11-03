@@ -72,3 +72,19 @@ def test_member_id():
 
 def test_clean_text_strips_control_chars():
     assert v.clean_text("  Ja\x00ne \n Doe ") == "Jane Doe"
+
+
+@pytest.mark.parametrize(
+    "zip_code, state",
+    [("19901", "DE"), ("10001", "NY"), ("94105", "CA"), ("60611", "IL"), ("78704", "TX"),
+     ("20500", "DC"), ("96813", "HI"), ("99501", "AK"), ("19901-1234", "DE"), ("09012", None), ("abc", None)],
+)
+def test_state_for_zip(zip_code, state):
+    assert v.state_for_zip(zip_code) == state
+
+
+def test_misheard_state_names_get_suggestions():
+    # From a live call: "Delaware" was transcribed as "Delivery".
+    assert v.suggest_states("Delivery")[0] == "Delaware"
+    assert v.suggest_states("Texus") == ["Texas"]
+    assert v.suggest_states("zzzz") == []

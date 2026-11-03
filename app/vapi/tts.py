@@ -36,6 +36,8 @@ _META_SENTENCE = re.compile(
     r"user (says|said|response))\b",
     re.IGNORECASE,
 )
+# Live calls spoke "What is your date of birth? Note:" - the model starting an aside to itself.
+_NOTE_ASIDE = re.compile(r"\s*note\b\s*[:,]", re.IGNORECASE)
 _SPACES = re.compile(r"\s+")
 # Typographic punctuation the model likes -> what a TTS phonemizer reads cleanly.
 _PUNCTUATION = str.maketrans({"‑": "-", "‐": "-", "–": ", ", "—": ", ", "’": "'", "‘": "'", "“": '"', "”": '"'})
@@ -107,7 +109,11 @@ def clean_for_speech(text: str) -> str:
     kept: list[str] = []
     for sentence in split_sentences(text):
         # gpt-oss sometimes says the same question twice in a row; say it once.
-        if _META_SENTENCE.search(sentence) or (kept and _norm(sentence) == _norm(kept[-1])):
+        if (
+            _META_SENTENCE.search(sentence)
+            or _NOTE_ASIDE.match(sentence)
+            or (kept and _norm(sentence) == _norm(kept[-1]))
+        ):
             continue
         kept.append(sentence)
     text = " ".join(kept)

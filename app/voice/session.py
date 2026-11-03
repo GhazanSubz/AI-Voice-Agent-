@@ -19,7 +19,7 @@ from typing import Any, Callable
 from pydantic import ValidationError
 
 from app.domain.schemas import REQUIRED_FIELDS, PatientCreate, PatientFields, PatientOut, PatientUpdate
-from app.domain.validators import US_STATES, normalize_us_phone
+from app.domain.validators import US_STATES, normalize_us_phone, state_for_zip, suggest_states
 from app.services.patients import PatientNotFound, PatientService, PersistenceError
 
 log = logging.getLogger(__name__)
@@ -115,7 +115,7 @@ class RegistrationSession:
             if "sex" not in result["still_missing_required"] and "sex" not in self.fields:
                 result["still_missing_required"].append("sex")
         if sex_note:
-            result["note"] = f"{result['note']} {sex_note}" if result.get("note") else sex_note
+            _add_note(result, sex_note)
         return result
 
     def update_fields(self, raw: dict[str, Any]) -> dict[str, Any]:
@@ -145,9 +145,10 @@ class RegistrationSession:
         result: dict[str, Any] = {"accepted": accepted, "rejected": rejected}
         if cleared:
             result["cleared"] = cleared
+        self._state_hints(raw, accepted, rejected, result)
 
         if self.phase is Phase.SAVED:
-            result["note"] = "The record is already saved. Ask before saving these changes as an update."
+            _add_note(result, "The record is already saved. Ask before saving these changes as an update.")
         elif accepted or cleared:
             self._after_change(result)
 
@@ -156,10 +157,30 @@ class RegistrationSession:
         self._notify()
         return result
 
+    def _state_hints(self, raw, accepted, rejected, result) -> None:
+        """Help with the state, which phone transcription garbles badly.
+
+        A live call heard "Delaware" as "dialogue", "Delivery" and "Bellumina", and the spelled
+        abbreviation D E as "B E". ZIP digits come through far more reliably, and the first
+        three digits fix the state, so when the state is still missing the ZIP proposes it.
+        """
+        if "state" in rejected and isinstance(raw.get("state"), str):
+            if suggestions := suggest_states(raw["state"]):
+                result["did_you_mean"] = {"state": suggestions}
+
+        # Only fills a gap: a state the caller did give is saved as given, never second-guessed.
+        zip_code = self.fields.get("zip_code")
+        if "zip_code" not in accepted or "state" in self.fields or not zip_code:
+            return
+        if zip_state := state_for_zip(zip_code):
+            name = US_STATES[zip_state]
+            result["state_from_zip"] = name
+            _add_note(result, f"That ZIP code is in {name}. Ask: 'That's in {name}, is that right?' and record it if yes.")
+
     def _after_change(self, result: dict[str, Any]) -> None:
         if self.phase is Phase.AWAITING_CONFIRMATION:
             # A correction during readback: confirm the changed fields, not the whole record again.
-            result["note"] = "Read back only the corrected fields, then ask if everything is now correct."
+            _add_note(result, "Read back only the corrected fields, then ask if everything is now correct.")
             self._asked_to_confirm_at = self.clock()
         elif not self.missing_required():
             self.phase = Phase.READY_FOR_READBACK
@@ -175,9 +196,10 @@ class RegistrationSession:
                     {"patient_id": str(p.patient_id), "first_name": p.first_name, "last_name": p.last_name}
                     for p in matches
                 ]
-                result["note"] = (
+                _add_note(
+                    result,
                     "This phone number matches an existing patient. Ask whether they want to update "
-                    "that record instead of creating a new one."
+                    "that record instead of creating a new one.",
                 )
 
     def _safe_find_by_phone(self, phone: str) -> list[PatientOut]:
@@ -337,6 +359,10 @@ class RegistrationSession:
     def _notify(self) -> None:
         if self.on_change:
             self.on_change(self)
+
+
+def _add_note(result: dict[str, Any], note: str) -> None:
+    result["note"] = f"{result['note']} {note}" if result.get("note") else note
 
 
 # What callers actually said, as the phone transcriber hears it. The "misheard" spellings come

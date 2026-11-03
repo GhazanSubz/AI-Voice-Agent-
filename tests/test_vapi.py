@@ -245,3 +245,13 @@ def test_failed_download_leaves_no_partial_model(tmp_path):
     with pytest.raises(OSError):
         ensure_file(str(target), (tmp_path / "missing.onnx").as_uri())
     assert not target.exists()
+
+
+def test_note_asides_are_not_spoken():
+    from app.vapi.tts import clean_for_speech
+
+    assert clean_for_speech("What is your date of birth? Note:") == "What is your date of birth?"
+    assert clean_for_speech("Could you tell me your street address? Note, the caller") == (
+        "Could you tell me your street address?"
+    )
+    assert clean_for_speech("Please note that we need a mailing address.") == "Please note that we need a mailing address."

@@ -98,7 +98,7 @@ def test_full_registration_over_webhook_is_saved_with_transcript(client):
     client.post("/vapi/webhook", json=event("assistant-request"), headers=AUTH)
 
     assert call_tool(client, "update_fields", {"fields": {"date_of_birth": "01/01/2999"}})["rejected"]
-    assert call_tool(client, "update_fields", {"fields": REQUIRED})["still_missing_required"] == []
+    assert call_tool(client, "update_fields", {"fields": REQUIRED, "sex_heard": "female"})["still_missing_required"] == []
     assert call_tool(client, "get_readback", {})["ready"] is True
     saved = call_tool(client, "save_patient", {"caller_confirmed": True})
     assert saved["saved"] is True
@@ -201,3 +201,47 @@ def test_repeated_sentences_are_spoken_once():
     from app.vapi.tts import clean_for_speech
 
     assert clean_for_speech("What is your sex? What is your sex? Male or female?") == "What is your sex? Male or female?"
+
+
+def test_assistant_turn_taking_fillers_and_goodbye(client):
+    assistant = client.post("/vapi/webhook", json=event("assistant-request"), headers=AUTH).json()["assistant"]
+
+    # Pauses mid-sentence ("Ladan ... and my last name is") shouldn't end the caller's turn.
+    assert assistant["startSpeakingPlan"]["smartEndpointingPlan"]["provider"] == "livekit"
+    # A one-word answer given while Sam is still asking must interrupt Sam.
+    assert assistant["stopSpeakingPlan"]["numWords"] == 0
+    # Our tools are silent: no "Just a sec" filler.
+    functions = [t for t in assistant["model"]["tools"] if t["type"] == "function"]
+    assert functions and all(t["messages"] == [{"type": "request-start", "content": ""}] for t in functions)
+    # The goodbye is said once, by the hang-up tool.
+    end_call = next(t for t in assistant["model"]["tools"] if t["type"] == "endCall")
+    assert "Goodbye" in end_call["messages"][0]["content"]
+    assert "endCallMessage" not in assistant
+    # The LLM is told to pass the caller's words for sex.
+    update = next(t for t in functions if t["function"]["name"] == "update_fields")
+    assert "sex_heard" in update["function"]["parameters"]["properties"]
+
+
+def test_missing_model_file_is_downloaded_once(tmp_path):
+    # A fresh deploy has no models/ folder (git-ignored); the engine must fetch the files itself.
+    from app.vapi.tts import ensure_file
+
+    source = tmp_path / "release.onnx"
+    source.write_bytes(b"model-bytes")
+    target = tmp_path / "volume" / "models" / "kokoro.onnx"
+
+    ensure_file(str(target), source.as_uri())
+    assert target.read_bytes() == b"model-bytes"
+
+    source.write_bytes(b"changed")
+    ensure_file(str(target), source.as_uri())  # already there: not downloaded again
+    assert target.read_bytes() == b"model-bytes"
+
+
+def test_failed_download_leaves_no_partial_model(tmp_path):
+    from app.vapi.tts import ensure_file
+
+    target = tmp_path / "models" / "kokoro.onnx"
+    with pytest.raises(OSError):
+        ensure_file(str(target), (tmp_path / "missing.onnx").as_uri())
+    assert not target.exists()

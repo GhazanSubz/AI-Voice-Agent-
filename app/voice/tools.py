@@ -36,7 +36,15 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "is still missing."
         ),
         "properties": {
-            "fields": {"type": "object", "properties": _FIELD_PROPERTIES, "additionalProperties": False}
+            "fields": {"type": "object", "properties": _FIELD_PROPERTIES, "additionalProperties": False},
+            "sex_heard": {
+                "type": "string",
+                "description": (
+                    "Required whenever fields.sex is set: the caller's exact words for that answer, "
+                    "copied from the transcript even if they look wrong (for example 'mail' or "
+                    "'Mary'). The server decides the value from these words."
+                ),
+            },
         },
         "required": ["fields"],
     },
@@ -161,7 +169,8 @@ class CallToolbox:
         fields = args.get("fields") or {}
         if not isinstance(fields, dict):
             return {"error": "fields must be an object of field name to value"}
-        return self.session.update_fields(fields)
+        sex_heard = args.get("sex_heard")
+        return self.session.record_answer(fields, sex_heard if isinstance(sex_heard, str) else None)
 
     async def _use_existing_record(self, args):
         return self.session.use_existing_record(str(args.get("patient_id", "")))

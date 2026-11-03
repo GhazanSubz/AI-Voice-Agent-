@@ -9,8 +9,11 @@ hears the first words before the whole reply is synthesized.
 import asyncio
 import logging
 import re
+import shutil
 import threading
 import time
+import urllib.request
+from pathlib import Path
 
 import numpy as np
 import soxr
@@ -38,6 +41,25 @@ _SPACES = re.compile(r"\s+")
 _PUNCTUATION = str.maketrans({"‑": "-", "‐": "-", "–": ", ", "—": ", ", "’": "'", "‘": "'", "“": '"', "”": '"'})
 
 
+def ensure_file(path: str, url: str) -> None:
+    """Download url to path unless it already exists. Writes to a temp file and renames it, so an
+    interrupted download never leaves a truncated model behind."""
+    target = Path(path)
+    if target.exists():
+        return
+    target.parent.mkdir(parents=True, exist_ok=True)
+    partial = target.with_name(target.name + ".part")
+    started = time.perf_counter()
+    log.info("downloading model file", extra={"path": str(target), "url": url})
+    with urllib.request.urlopen(url, timeout=60) as response, open(partial, "wb") as out:
+        shutil.copyfileobj(response, out, length=1024 * 1024)
+    partial.replace(target)
+    log.info(
+        "model file ready",
+        extra={"path": str(target), "mb": round(target.stat().st_size / 1e6, 1), "secs": round(time.perf_counter() - started, 1)},
+    )
+
+
 class KokoroEngine:
     """Loads the ONNX model once per process; loading takes seconds, synthesis is per request."""
 
@@ -51,6 +73,11 @@ class KokoroEngine:
             if self._kokoro is None:
                 from kokoro_onnx import Kokoro  # heavy import, keep it off the API's startup path
 
+                # The model files are git-ignored, so a fresh deploy has none. Fetching them here
+                # (once; point the paths at a persistent volume) keeps deploys independent of any
+                # build-step configuration.
+                ensure_file(self._settings.kokoro_model_path, self._settings.kokoro_model_url)
+                ensure_file(self._settings.kokoro_voices_path, self._settings.kokoro_voices_url)
                 started = time.perf_counter()
                 self._kokoro = Kokoro(self._settings.kokoro_model_path, self._settings.kokoro_voices_path)
                 log.info("kokoro loaded", extra={"secs": round(time.perf_counter() - started, 2)})

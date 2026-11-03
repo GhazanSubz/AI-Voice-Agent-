@@ -210,3 +210,52 @@ def test_correction_during_readback_restarts_the_confirmation_wait(patients):
     assert session.save_patient(caller_confirmed=True)["saved"] is False
     clock.now += 4
     assert session.save_patient(caller_confirmed=True)["saved"] is True
+
+
+# ---- sex decided from the caller's words (live call: "male" was transcribed "Mary", saved Female)
+
+@pytest.mark.parametrize(
+    "heard, expected",
+    [
+        ("male", ("Male", False)), ("I'm a man", ("Male", False)), ("Female.", ("Female", False)),
+        ("mail", ("Male", True)), ("Meal. Mail. M a l e.", ("Male", True)), ("fe mail", ("Female", True)),
+        ("other", ("Other", False)), ("I'd prefer not to say", ("Decline to Answer", False)),
+        ("Mary", (None, False)), ("It is me.", (None, False)), ("male, no, female", (None, False)), ("", (None, False)),
+    ],
+)
+def test_sex_from_speech(heard, expected):
+    from app.voice.session import sex_from_speech
+
+    assert sex_from_speech(heard) == expected
+
+
+def test_unclear_sex_is_rejected_not_guessed(session):
+    result = session.record_answer({"sex": "Female"}, sex_heard="Mary")
+
+    assert "sex" in result["rejected"]
+    assert "sex" not in session.fields
+    assert "sex" in result["still_missing_required"]
+    assert "male or female" in result["note"]
+
+
+def test_the_callers_words_win_over_the_llms_guess(session):
+    result = session.record_answer({"sex": "Female", "first_name": "Ghazan"}, sex_heard="male")
+
+    assert session.fields["sex"] == "Male"
+    assert result["accepted"]["sex"] == "Male"
+    assert "first_name" in result["accepted"]
+
+
+def test_misheard_sex_is_accepted_with_a_confirmation_note(session):
+    result = session.record_answer({"sex": "Male"}, sex_heard="mail")
+    assert session.fields["sex"] == "Male"
+    assert "is that right" in result["note"]
+
+
+def test_sex_without_the_callers_words_is_rejected(session):
+    assert "sex" in session.record_answer({"sex": "Male"}, sex_heard=None)["rejected"]
+
+
+def test_other_fields_need_no_heard_text(session):
+    result = session.record_answer({"first_name": "Maria"}, sex_heard=None)
+    assert result["accepted"] and not result["rejected"]

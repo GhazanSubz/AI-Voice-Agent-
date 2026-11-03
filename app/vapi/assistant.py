@@ -14,6 +14,7 @@ from app.voice.tools import TOOL_SCHEMAS
 # Our end_call is replaced by Vapi's built-in hang-up tool, which actually ends the phone call.
 _VAPI_BUILTIN = {"end_call"}
 VAPI_END_CALL_TOOL = "endCall"
+GOODBYE = "Thanks for calling, and take care. Goodbye!"
 
 
 def auth_headers(settings: Settings) -> dict[str, str]:
@@ -41,11 +42,15 @@ def build_assistant(
                 "parameters": {"type": "object", "properties": t["properties"], "required": t["required"]},
             },
             "server": webhook,
+            # An empty request-start message silences Vapi's default filler ("Just a sec", "Give me
+            # a moment"), which live calls showed after nearly every answer.
+            "messages": [{"type": "request-start", "content": ""}],
         }
         for t in TOOL_SCHEMAS
         if t["name"] not in _VAPI_BUILTIN
     ]
-    tools.append({"type": "endCall"})
+    # The goodbye belongs to the hang-up tool; the prompt tells the model not to say it as well.
+    tools.append({"type": "endCall", "messages": [{"type": "request-start", "content": GOODBYE}]})
 
     return {
         "name": "Sam - patient intake",
@@ -76,22 +81,25 @@ def build_assistant(
             "provider": "custom-voice",
             "server": {"url": f"{base}/vapi/tts", "headers": headers, "timeoutSeconds": 30},
         },
-        # Turn-taking. The first live call showed callers reading phone numbers and ZIPs in chunks
-        # ("5 1 3 ... 6 8 1 ..."); with Vapi's defaults every pause ended the turn, the agent
-        # replied mid-number and the replies piled up. Wait longer after digits and require a
-        # couple of words before treating caller speech as an interruption.
+        # Turn-taking, tuned from live calls:
+        # - Callers read numbers in chunks and pause between first and last name ("Ladan ... and
+        #   my last name is"). Ending the turn on punctuation cut them off, so a LiveKit model
+        #   judges whether the sentence sounds finished (English only, matching the transcriber)
+        #   and waits up to 2 s when it doesn't. The transcription plan is the fallback.
+        # - Callers answer while Sam is still asking ("male" mid-question). With numWords 2 a
+        #   one-word answer never interrupted, so Sam talked over it. 0 stops on any voice.
         "startSpeakingPlan": {
-            "waitSeconds": 0.8,
+            "waitSeconds": 0.6,
+            "smartEndpointingPlan": {"provider": "livekit", "waitFunction": "2000 / (1 + exp(-10 * (x - 0.5)))"},
             "transcriptionEndpointingPlan": {
-                "onPunctuationSeconds": 0.5,
+                "onPunctuationSeconds": 0.8,
                 "onNoPunctuationSeconds": 1.5,
                 "onNumberSeconds": 1.8,
             },
         },
-        "stopSpeakingPlan": {"numWords": 2, "voiceSeconds": 0.3, "backoffSeconds": 1},
+        "stopSpeakingPlan": {"numWords": 0, "voiceSeconds": 0.3, "backoffSeconds": 1},
         "server": webhook,
         "serverMessages": ["tool-calls", "end-of-call-report", "status-update"],
-        "endCallMessage": "Thanks for calling. Goodbye!",
         "backgroundSound": "off",
         "maxDurationSeconds": 900,
     }

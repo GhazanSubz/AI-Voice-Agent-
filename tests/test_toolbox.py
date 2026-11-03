@@ -45,7 +45,7 @@ def test_full_registration_through_tools(services):
     box = CallToolbox(session=RegistrationSession(call_sid="CA1", patients=patients, min_confirm_secs=0), on_end_call=on_end)
 
     async def flow():
-        await box.call("update_fields", {"fields": REQUIRED})
+        await box.call("update_fields", {"fields": REQUIRED, "sex_heard": "female"})
         await box.call("get_readback", {})
         saved = await box.call("save_patient", {"caller_confirmed": True})
         await box.call("end_call", {"reason": "completed"})

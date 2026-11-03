@@ -8,6 +8,7 @@ unless all required fields are present, the readback happened, and the caller co
 """
 
 import logging
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -83,6 +84,39 @@ class RegistrationSession:
                 self.caller_number = None
 
     # ---- tool: update_fields -------------------------------------------------------------
+
+    def record_answer(self, raw: dict[str, Any], sex_heard: str | None) -> dict[str, Any]:
+        """update_fields as called by the LLM, with sex decided from the caller's own words.
+
+        On a live call the transcriber heard "male" as "Mary" and the LLM saved Female. So the LLM
+        must pass what the caller literally said, and the server maps it (see sex_from_speech);
+        the LLM's own guess is never trusted for this field.
+        """
+        raw = dict(raw)
+        sex_rejected: str | None = None
+        sex_note: str | None = None
+        if raw.get("sex") not in (None, ""):
+            value, misheard = sex_from_speech(sex_heard or "")
+            if value is None:
+                raw.pop("sex")
+                sex_rejected = "I didn't catch a clear answer"
+                sex_note = (
+                    "Do not guess. Ask again in a short yes or no form, for example "
+                    "'Sorry, was that male or female?'"
+                )
+            else:
+                raw["sex"] = value
+                if misheard:
+                    sex_note = f"The transcript was unclear. Confirm briefly: 'I have {value}, is that right?'"
+
+        result = self.update_fields(raw)
+        if sex_rejected:
+            result["rejected"]["sex"] = sex_rejected
+            if "sex" not in result["still_missing_required"] and "sex" not in self.fields:
+                result["still_missing_required"].append("sex")
+        if sex_note:
+            result["note"] = f"{result['note']} {sex_note}" if result.get("note") else sex_note
+        return result
 
     def update_fields(self, raw: dict[str, Any]) -> dict[str, Any]:
         accepted: dict[str, str] = {}
@@ -303,6 +337,33 @@ class RegistrationSession:
     def _notify(self) -> None:
         if self.on_change:
             self.on_change(self)
+
+
+# What callers actually said, as the phone transcriber hears it. The "misheard" spellings come
+# from live calls ("mail", "meal" for male). Word boundaries keep "female" from matching "male".
+_SEX_FROM_SPEECH = (
+    ("Decline to Answer", r"\b(decline|prefer not|rather not|don'?t want to (say|answer)|no comment)\b", False),
+    ("Other", r"\b(other|non ?-?binary)\b", False),
+    ("Female", r"\b(female|woman|girl|lady)\b", False),
+    ("Female", r"\b(femail|fee ?male|fe ?mail)\b", True),
+    ("Male", r"\b(male|man|boy|guy)\b", False),
+    ("Male", r"\b(mail|meal|mel|mayle|mael)\b", True),
+)
+
+
+def sex_from_speech(heard: str) -> tuple[str | None, bool]:
+    """Map the caller's words to a sex value. Returns (value, misheard), or (None, False) when the
+    words are unclear ("Mary", "me") or contradictory ("male, no, female")."""
+    text = heard.lower()
+    found: dict[str, bool] = {}
+    for value, pattern, misheard in _SEX_FROM_SPEECH:
+        if re.search(pattern, text):
+            found[value] = found.get(value, True) and misheard
+            text = re.sub(pattern, " ", text)  # "fe mail" must not also count as "mail"
+    if len(found) != 1:
+        return None, False
+    (value, misheard), = found.items()
+    return value, misheard
 
 
 _MONTHS = (

@@ -109,6 +109,15 @@ class RegistrationSession:
                 if misheard:
                     sex_note = f"The transcript was unclear. Confirm briefly: 'I have {value}, is that right?'"
 
+        # A spelled name split across fields ("G H A Z A N" saved as first "G", last "Hazan") shows
+        # up as a one-letter name. Real one-letter names are rare enough on a phone line to ask.
+        split_names = [
+            f for f in ("first_name", "last_name")
+            if isinstance(raw.get(f), str) and len(raw[f].replace(".", "").strip()) == 1
+        ]
+        for f in split_names:
+            raw.pop(f)
+
         result = self.update_fields(raw)
         if sex_rejected:
             result["rejected"]["sex"] = sex_rejected
@@ -116,6 +125,13 @@ class RegistrationSession:
                 result["still_missing_required"].append("sex")
         if sex_note:
             _add_note(result, sex_note)
+        for f in split_names:
+            result["rejected"][f] = "that is a single letter"
+            _add_note(
+                result,
+                "If the caller spelled the name letter by letter, join all the letters into one word "
+                "for the one name you asked about, then confirm it.",
+            )
         return result
 
     def update_fields(self, raw: dict[str, Any]) -> dict[str, Any]:

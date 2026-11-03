@@ -290,3 +290,16 @@ def test_notes_add_up_instead_of_replacing_each_other(session, patients):
     result = session.update_fields({"phone_number": REQUIRED["phone_number"], "zip_code": "19901"})
 
     assert "existing patient" in result["note"] and "Delaware" in result["note"]
+
+
+def test_a_spelled_name_split_into_a_single_letter_is_rejected(session):
+    # Text test: "G H A Z A N" was saved as first name "G", last name "Hazan".
+    result = session.record_answer({"first_name": "G", "last_name": "HAZAN"}, sex_heard=None)
+
+    assert result["rejected"]["first_name"] == "that is a single letter"
+    assert "first_name" not in session.fields
+    assert "join all the letters" in result["note"]
+
+
+def test_initial_with_a_dot_counts_as_a_single_letter(session):
+    assert "first_name" in session.record_answer({"first_name": "J."}, sex_heard=None)["rejected"]

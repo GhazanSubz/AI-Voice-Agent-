@@ -99,7 +99,9 @@ def build_assistant(
         },
         "stopSpeakingPlan": {"numWords": 0, "voiceSeconds": 0.3, "backoffSeconds": 1},
         "server": webhook,
-        "serverMessages": ["tool-calls", "end-of-call-report", "status-update"],
+        # user-interrupted / speech-update let the speech gate (speech_gate.py) know the caller
+        # started talking, so a barge-in answer is never held back.
+        "serverMessages": ["tool-calls", "end-of-call-report", "status-update", "user-interrupted", "speech-update"],
         "backgroundSound": "off",
         "maxDurationSeconds": 900,
     }

@@ -51,7 +51,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.engine = engine
     app.state.patient_service = PatientService(session_factory)
     app.state.call_service = CallService(session_factory)
-    app.state.call_registry = CallRegistry()
+    app.state.call_registry = CallRegistry(speech_hold_secs=settings.speech_hold_secs)
     app.state.tts_engine = KokoroEngine(settings)
 
     install_exception_handlers(app)

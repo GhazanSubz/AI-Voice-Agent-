@@ -55,6 +55,11 @@ async def vapi_webhook(request: Request):
         return _assistant_request(message, state.settings, state.patient_service, state.call_service, state.call_registry)
     if kind == "tool-calls":
         return await _tool_calls(message, state.settings, state.patient_service, state.call_service, state.call_registry)
+    if kind == "user-interrupted" or (
+        kind == "speech-update" and message.get("role") == "user" and message.get("status") == "started"
+    ):
+        state.call_registry.speech_gate(_call_id(message)).caller_spoke()
+        return {}
     if kind == "end-of-call-report":
         _end_of_call(message, state.call_service, state.call_registry)
     elif kind == "status-update":

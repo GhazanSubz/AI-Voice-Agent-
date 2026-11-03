@@ -18,7 +18,7 @@ from pathlib import Path
 import numpy as np
 import soxr
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 from app.config import Settings
 from app.vapi.webhook import require_vapi_secret
@@ -140,14 +140,19 @@ def _to_pcm16(samples: np.ndarray, source_rate: int, target_rate: int) -> bytes:
 async def synthesize(request: Request):
     require_vapi_secret(request)
     message = (await request.json()).get("message") or {}
-    text = clean_for_speech(message.get("text") or "")
     sample_rate = int(message.get("sampleRate") or 0)
-    if message.get("type") != "voice-request" or not text or sample_rate not in _SUPPORTED_RATES:
+    if message.get("type") != "voice-request" or not message.get("text") or sample_rate not in _SUPPORTED_RATES:
         raise HTTPException(status_code=400, detail="expected a voice-request with text and a supported sampleRate")
 
-    # The language follows the call: set_language("es") on the session switches the voice too.
     call_id = str((message.get("call") or {}).get("id") or "")
-    toolbox = request.app.state.call_registry.get(call_id)
+    registry = request.app.state.call_registry
+    text = registry.speech_gate(call_id).filter(clean_for_speech(message["text"]), call_id)
+    if not text:
+        # Nothing to say (a stage direction, or a second question). Empty audio, not an error.
+        return Response(content=b"", media_type="application/octet-stream")
+
+    # The language follows the call: set_language("es") on the session switches the voice too.
+    toolbox = registry.get(call_id)
     language = toolbox.session.language if toolbox else "en"
 
     engine: KokoroEngine = request.app.state.tts_engine

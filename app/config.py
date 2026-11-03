@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     vapi_transcriber_language: str = "en"
     # Minimum seconds between asking "is everything correct?" and accepting a save.
     confirm_min_secs: float = 3.0
+    # After Sam asks a question, drop anything else it says for this long (stacked questions).
+    # Cut short when the caller interrupts; 0 disables the hold.
+    speech_hold_secs: float = 3.0
 
     # Only used by scripts/chat_cli.py, which talks to Groq directly to test the agent in text.
     groq_api_key: str = ""

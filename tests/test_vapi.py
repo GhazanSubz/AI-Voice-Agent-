@@ -255,3 +255,82 @@ def test_note_asides_are_not_spoken():
         "Could you tell me your street address?"
     )
     assert clean_for_speech("Please note that we need a mailing address.") == "Please note that we need a mailing address."
+
+
+# ---- one question per turn (live: "Did I get that right? What is your last name? What is ...")
+
+class Clock:
+    def __init__(self):
+        self.now = 100.0
+
+    def __call__(self):
+        return self.now
+
+
+def test_gate_cuts_text_after_the_first_question():
+    from app.vapi.speech_gate import SpeechGate
+
+    gate = SpeechGate(clock=Clock())
+    assert gate.filter("Got it, Ghazan. Did I get that right? What is your last name?") == (
+        "Got it, Ghazan. Did I get that right?"
+    )
+
+
+def test_gate_holds_follow_up_speech_then_lets_it_through():
+    from app.vapi.speech_gate import SpeechGate
+
+    clock = Clock()
+    gate = SpeechGate(hold_secs=3.0, clock=clock)
+    assert gate.filter("What is your date of birth?") == "What is your date of birth?"
+    clock.now += 1.0
+    assert gate.filter("Could you tell me your date of birth?") == ""  # stacked question
+    clock.now += 3.0
+    assert gate.filter("Got it, January first. What sex should I put down?")  # real next turn
+
+
+def test_gate_never_holds_statements():
+    from app.vapi.speech_gate import SpeechGate
+
+    gate = SpeechGate(clock=Clock())
+    assert gate.filter("Maria Davis, born July fourth.") == "Maria Davis, born July fourth."
+    assert gate.filter("Phone three one two, five five five.") == "Phone three one two, five five five."
+
+
+def test_caller_interrupting_releases_the_hold():
+    from app.vapi.speech_gate import SpeechGate
+
+    gate = SpeechGate(clock=Clock())
+    gate.filter("What sex should I put down?")
+    gate.caller_spoke()
+    assert gate.filter("Got it, male. What is your phone number?") == "Got it, male. What is your phone number?"
+
+
+def tts(client, text, call_id="call-1"):
+    body = {"message": {"type": "voice-request", "text": text, "sampleRate": 8000, "call": {"id": call_id}}}
+    return client.post("/vapi/tts", json=body, headers=AUTH)
+
+
+def test_stacked_question_gets_empty_audio_and_barge_in_resets(client):
+    client.app.state.tts_engine = FakeEngine()
+
+    first = tts(client, "What is your date of birth?")
+    stacked = tts(client, "Could you tell me your date of birth?")
+    assert first.status_code == 200 and len(first.content) > 0
+    assert stacked.status_code == 200 and stacked.content == b""
+
+    interrupted = event("user-interrupted")
+    assert client.post("/vapi/webhook", json=interrupted, headers=AUTH).status_code == 200
+    assert len(tts(client, "Got it, January first. What sex should I put down?").content) > 0
+
+
+def test_speech_update_from_the_caller_also_resets(client):
+    client.app.state.tts_engine = FakeEngine()
+    tts(client, "What is your date of birth?")
+    started = event("speech-update", status="started", role="user")
+    client.post("/vapi/webhook", json=started, headers=AUTH)
+    assert len(tts(client, "Got it. What sex should I put down?").content) > 0
+
+
+def test_assistant_subscribes_to_interruption_events(client):
+    assistant = client.post("/vapi/webhook", json=event("assistant-request"), headers=AUTH).json()["assistant"]
+    assert {"user-interrupted", "speech-update"} <= set(assistant["serverMessages"])

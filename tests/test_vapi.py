@@ -337,3 +337,38 @@ def test_speech_update_from_the_caller_also_resets(client):
 def test_assistant_subscribes_to_interruption_events(client):
     assistant = client.post("/vapi/webhook", json=event("assistant-request"), headers=AUTH).json()["assistant"]
     assert {"user-interrupted", "speech-update"} <= set(assistant["serverMessages"])
+
+
+def test_leaked_reasoning_is_never_spoken():
+    # Spoken aloud on a live call, word for word.
+    from app.vapi.tts import clean_for_speech
+
+    leaked = (
+        "The assistant responded with garbled text. Must correct, we should acknowledge the phone "
+        "number. Then ask for address line 1. The last response is invalid."
+    )
+    assert clean_for_speech(leaked) == ""
+    assert clean_for_speech("Need to correct, we need to respond with proper text. No extra characters, "
+                            "The phone number is accepted.") == ""
+    assert clean_for_speech("Got. We need to continue.") == ""
+
+
+def test_real_speech_survives_the_reasoning_filter():
+    from app.vapi.tts import clean_for_speech
+
+    for spoken in (
+        "Thanks, Ghazan. What is your date of birth?",
+        "We need a U.S. mailing address to register you. Could you give me one?",
+        "Got it, Kevin, spelled K, E, V, I, N. Did I get that right?",
+        "Could you say the last four digits?",
+        "Five nine six, got it. And the next three digits?",
+    ):
+        assert clean_for_speech(spoken) == spoken
+
+
+def test_us_abbreviation_is_not_split_into_two_sentences():
+    from app.vapi.tts import split_sentences
+
+    assert split_sentences("We need a U.S. address. Do you have one?") == [
+        "We need a U.S. address.", "Do you have one?"
+    ]

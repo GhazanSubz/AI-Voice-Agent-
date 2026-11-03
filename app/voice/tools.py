@@ -42,7 +42,8 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "description": (
                     "Required whenever fields.sex is set: the caller's exact words for that answer, "
                     "copied from the transcript even if they look wrong (for example 'mail' or "
-                    "'Mary'). The server decides the value from these words."
+                    "'Mary'). If they said yes to a question naming one option ('Was that male?'), "
+                    "pass 'yes, male'. The server decides the value from these words."
                 ),
             },
         },

@@ -303,3 +303,9 @@ def test_a_spelled_name_split_into_a_single_letter_is_rejected(session):
 
 def test_initial_with_a_dot_counts_as_a_single_letter(session):
     assert "first_name" in session.record_answer({"first_name": "J."}, sex_heard=None)["rejected"]
+
+
+def test_yes_to_a_named_option_records_it(session):
+    # Live call: "Was that male?" -> "Yes. It is me." looped because "yes" names no option.
+    result = session.record_answer({"sex": "Male"}, sex_heard="yes, male")
+    assert session.fields["sex"] == "Male" and not result["rejected"]

@@ -29,13 +29,29 @@ router = APIRouter(prefix="/vapi", tags=["telephony"])
 
 _SUPPORTED_RATES = {8000, 16000, 22050, 24000, 44100}
 _KOKORO_LANG = {"en": "en-us", "es": "es"}
-_SENTENCE_END = re.compile(r"(?<=[.!?])\s*(?=[A-Z¿¡\"'(\[]|$)|(?<=[.!?])\s+")
+# Split after . ! ? but not inside abbreviations like "U.S." (a single capital before the dot).
+_SENTENCE_END = re.compile(r"(?<![A-Z]\.)(?<=[.!?])\s*(?=[A-Z¿¡\"'(\[]|$)|(?<![A-Z]\.)(?<=[.!?])\s+")
 _ASIDE = re.compile(r"\([^)]*\)|\[[^\]]*\]")
+# Sentences that are the model talking to itself, never to the caller. Besides the stage
+# directions, a live call spoke gpt-oss's reasoning aloud: "The assistant responded with garbled
+# text. Must correct, we should acknowledge the phone number. The last response is invalid."
+# Sam addresses the caller as "you", so third-person talk about "the assistant" / "the user" /
+# "the caller", or "we need to / we should / must" planning, is never meant to be heard.
 _META_SENTENCE = re.compile(
     r"\b(wait(ing)? for (the )?(user|caller|your|their)|awaiting (user|caller|your)|user input|"
-    r"user (says|said|response))\b",
+    r"user (says|said|response)|"
+    r"the (assistant|user|caller|system)\b|"
+    r"we (need|have|want) to|we should|let'?s (ask|respond|correct|continue)|"
+    r"must (correct|respond|ask|acknowledge)|(last|previous) (response|reply|message)|"
+    r"respond with|tool (call|result)|update_fields|get_readback|save_patient|"
+    r"address line \d|(first|last)_name|zip_code|phone_number|"
+    r"(is|was|been) accepted|no extra characters|need to correct)\b"
+    # Instructions to itself: "Then ask for ...", "Now confirm the ..."
+    r"|^\s*(then|now|next)?\s*(ask|say|confirm|acknowledge|respond|record|call)\s+(for|the|them|him|her|that)\b",
     re.IGNORECASE,
 )
+# A lone acknowledgement fragment left behind by the filter ("Got."), not worth speaking alone.
+_FRAGMENT = re.compile(r"^\s*(got|ok|okay)\s*[.,]?\s*$", re.IGNORECASE)
 # Live calls spoke "What is your date of birth? Note:" - the model starting an aside to itself.
 _NOTE_ASIDE = re.compile(r"\s*note\b\s*[:,]", re.IGNORECASE)
 _SPACES = re.compile(r"\s+")
@@ -116,6 +132,10 @@ def clean_for_speech(text: str) -> str:
         ):
             continue
         kept.append(sentence)
+    if len(kept) > 1 or (kept and not _FRAGMENT.match(kept[0])):
+        kept = [k for k in kept if not _FRAGMENT.match(k)] or kept
+    else:
+        kept = []
     text = " ".join(kept)
     return _SPACES.sub(" ", text.translate(_PUNCTUATION)).strip()
 
